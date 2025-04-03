@@ -14,6 +14,7 @@
     {
       "name": "convert-markdown-to-tana-paste",
       "title": "Convert Markdown to Tana Paste",
+      "subtitle": "Tana",
       "description": "Takes Markdown text from your clipboard and converts it to Tana Paste format.",
       "mode": "no-view"
     }
