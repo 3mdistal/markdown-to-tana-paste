@@ -11,20 +11,59 @@ export function markdownToTanaPaste(markdown: string): string {
     const listIndentStack: number[] = [];   // Tracks char positions for lists
     const spacePerIndent = 2;
 
+    // --- Stateful applyInlineFormatting function ---
     function applyInlineFormatting(text: string): string {
-        // 1. Normalize bold: __bold__ -> **bold**
-        text = text.replace(/(?<!\*\*\*)(?:(^|\s|\()(__)(?=\S))(.+?)(?<=\S)\2(?![\*])(\s|$|\)|\.)/g, '$1**$3**$4');
+        let result = '';
+        let i = 0;
+        const len = text.length;
 
-        // 2. Convert italic *italic* or _italic_ -> __italic__
-        //    Make sure not to match inside existing **...**
-        text = text.replace(/(?<!\*\*)(?<![\*_])(?:(^|\s|\()([*_])(?=\S))(.+?)(?<=\S)\2(?![\*_])(?<!\*\*)(\s|$|\)|\.)/g, '$1__$3__$4');
-
-        // 3. Ensure final bold is **bold** (handles original **bold**)
-        //    This might re-process, but ensures the final state is correct.
-        text = text.replace(/(?<!\*\*\*\*|\*\*)(?:(^|\s|\()(\*\*))(?=\S)(.+?)(?<=\S)\2(?![\*])(\s|$|\)|\.)/g, '$1**$3**$4');
-
-        return text;
+        while (i < len) {
+            // Check for ** or __ (Bold)
+            if ((text.startsWith('**', i) || text.startsWith('__', i)) && text[i + 2] && text[i + 2].trim() !== '') {
+                const marker = text.substring(i, i + 2);
+                const endMarkerIndex = text.indexOf(marker, i + 2);
+                if (endMarkerIndex > i + 1) {
+                    // Lookahead/behind for valid boundaries
+                    const lookAhead = text[endMarkerIndex + 2] === undefined || text[endMarkerIndex + 2].match(/\s|[.,!?;:)]|$/);
+                    const lookBehind = text[endMarkerIndex - 1] && text[endMarkerIndex - 1].trim() !== '';
+                    if (lookAhead && lookBehind) {
+                        // Recursively format content within markers
+                        result += '**' + applyInlineFormatting(text.substring(i + 2, endMarkerIndex)) + '**';
+                        i = endMarkerIndex + 2;
+                        continue;
+                    }
+                }
+            }
+            // Check for * or _ (Italic)
+            if ((text[i] === '*' || text[i] === '_') && text[i + 1] && text[i + 1].trim() !== '') {
+                const marker = text[i];
+                // Skip if it's actually part of a bold marker
+                if (text[i + 1] === marker) {
+                    result += text.substring(i, i + 2);
+                    i += 2;
+                    continue;
+                }
+                const endMarkerIndex = text.indexOf(marker, i + 1);
+                // Ensure it's not consuming part of a bold marker if same char
+                if (endMarkerIndex > i && (text[endMarkerIndex + 1] !== marker || text[endMarkerIndex - 1] !== marker)) {
+                    // Lookahead/behind for valid boundaries
+                    const lookAhead = text[endMarkerIndex + 1] === undefined || text[endMarkerIndex + 1].match(/\s|[.,!?;:)]|$/);
+                    const lookBehind = text[endMarkerIndex - 1] && text[endMarkerIndex - 1].trim() !== '';
+                    if (lookAhead && lookBehind) {
+                        // Recursively format content within markers
+                        result += '__' + applyInlineFormatting(text.substring(i + 1, endMarkerIndex)) + '__';
+                        i = endMarkerIndex + 1;
+                        continue;
+                    }
+                }
+            }
+            // No marker found, append char
+            result += text[i];
+            i++;
+        }
+        return result;
     }
+    // --- End Inline Formatting Function ---
 
     lines.forEach((line) => {
         const trimmedLine = line.trim();
