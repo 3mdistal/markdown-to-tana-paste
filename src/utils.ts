@@ -7,119 +7,92 @@ export function markdownToTanaPaste(markdown: string): string {
     const lines = markdown.split('\n');
     let tanaPaste = '%%tana%%\n';
     let outputLines: string[] = [];
-    const listIndentStack: number[] = []; // Stack tracks character count of list markers' start
-    const spacePerIndent = 2; // Assume 2 spaces per indent level
+    const headingLevelStack: number[] = []; // Tracks heading levels [1, 2]
+    const listIndentStack: number[] = [];   // Tracks char positions for lists
+    const spacePerIndent = 2;
 
     function applyInlineFormatting(text: string): string {
-        let result = '';
-        let i = 0;
-        const len = text.length;
+        // 1. Normalize bold: __bold__ -> **bold**
+        text = text.replace(/(?<!\*\*\*)(?:(^|\s|\()(__)(?=\S))(.+?)(?<=\S)\2(?![\*])(\s|$|\)|\.)/g, '$1**$3**$4');
 
-        while (i < len) {
-            // Check for ** or __ (Bold)
-            if ((text.startsWith('**', i) || text.startsWith('__', i)) && text[i + 2] && text[i + 2].trim() !== '') {
-                const marker = text.substring(i, i + 2);
-                const endMarkerIndex = text.indexOf(marker, i + 2);
-                if (endMarkerIndex > i + 1) {
-                    // Ensure it's a valid closing marker (not preceded by space, followed by space/end/punctuation)
-                    const lookAhead = text[endMarkerIndex + 2] === undefined || text[endMarkerIndex + 2].match(/\s|[.,!?;:)]|$/);
-                    const lookBehind = text[endMarkerIndex - 1] && text[endMarkerIndex - 1].trim() !== '';
-                    if (lookAhead && lookBehind) {
-                        result += '**' + applyInlineFormatting(text.substring(i + 2, endMarkerIndex)) + '**';
-                        i = endMarkerIndex + 2;
-                        continue;
-                    }
-                }
-            }
+        // 2. Convert italic *italic* or _italic_ -> __italic__
+        //    Make sure not to match inside existing **...**
+        text = text.replace(/(?<!\*\*)(?<![\*_])(?:(^|\s|\()([*_])(?=\S))(.+?)(?<=\S)\2(?![\*_])(?<!\*\*)(\s|$|\)|\.)/g, '$1__$3__$4');
 
-            // Check for * or _ (Italic)
-            if ((text[i] === '*' || text[i] === '_') && text[i + 1] && text[i + 1].trim() !== '') {
-                const marker = text[i];
-                // Avoid matching ** or __ as italic
-                if (text[i + 1] === marker) {
-                    result += text.substring(i, i + 2);
-                    i += 2;
-                    continue;
-                }
+        // 3. Ensure final bold is **bold** (handles original **bold**)
+        //    This might re-process, but ensures the final state is correct.
+        text = text.replace(/(?<!\*\*\*\*|\*\*)(?:(^|\s|\()(\*\*))(?=\S)(.+?)(?<=\S)\2(?![\*])(\s|$|\)|\.)/g, '$1**$3**$4');
 
-                const endMarkerIndex = text.indexOf(marker, i + 1);
-                // Ensure it's not consuming part of a bold marker if same char
-                if (endMarkerIndex > i && text[endMarkerIndex + 1] !== marker && text[endMarkerIndex - 1] !== marker) {
-                    // Ensure it's a valid closing marker
-                    const lookAhead = text[endMarkerIndex + 1] === undefined || text[endMarkerIndex + 1].match(/\s|[.,!?;:)]|$/);
-                    const lookBehind = text[endMarkerIndex - 1] && text[endMarkerIndex - 1].trim() !== '';
-
-                    if (lookAhead && lookBehind) {
-                        result += '__' + applyInlineFormatting(text.substring(i + 1, endMarkerIndex)) + '__';
-                        i = endMarkerIndex + 1;
-                        continue;
-                    }
-                }
-            }
-
-            // No formatting marker found at this position, just append the character
-            result += text[i];
-            i++;
-        }
-        return result;
+        return text;
     }
 
     lines.forEach((line) => {
         const trimmedLine = line.trim();
-
-        // Skip empty lines
         if (trimmedLine === '') return;
 
-        // Handle Headings
+        // --- Determine current indentation context --- 
+        const currentHeadingDepth = headingLevelStack.length; // How many levels deep are we in headings?
+        const baseIndent = '  '.repeat(currentHeadingDepth); // Base indent string from headings
+
+        // --- Handle Headings --- 
         const headingMatch = trimmedLine.match(/^(#+)\s+(.*)/);
         if (headingMatch) {
-            listIndentStack.length = 0; // Headings reset list indentation
+            const newHeadingLevel = headingMatch[1].length;
             const content = applyInlineFormatting(headingMatch[2]);
-            outputLines.push(`- !! ${content}`);
+
+            // <<< Corrected Logic: Calculate indent *before* popping >>>
+            let tempHeadingDepth = headingLevelStack.length;
+            while (tempHeadingDepth > 0 && newHeadingLevel <= headingLevelStack[tempHeadingDepth - 1]) {
+                tempHeadingDepth--;
+            }
+            const headingLineIndent = '  '.repeat(tempHeadingDepth);
+
+            // Now, adjust the *actual* stack for subsequent lines
+            while (headingLevelStack.length > 0 && newHeadingLevel <= headingLevelStack[headingLevelStack.length - 1]) {
+                headingLevelStack.pop();
+            }
+            headingLevelStack.push(newHeadingLevel);
+            listIndentStack.length = 0; // Reset list context
+
+            outputLines.push(`${headingLineIndent}- !! ${content}`);
             return;
         }
 
-        // Handle Lists (Unordered and Ordered)
+        // --- Handle Lists --- 
         const listItemMatch = line.match(/^(\s*)(?:-|\*|[0-9]+\.)\s+(.*)/);
         if (listItemMatch) {
-            const charIndent = listItemMatch[1].length; // Actual character indent from line start
+            const listCharIndent = listItemMatch[1].length;
             let content = listItemMatch[2];
-            let currentTanaLevel = 0;
 
-            // Adjust stack based on character indent
-            while (listIndentStack.length > 0 && charIndent < listIndentStack[listIndentStack.length - 1]) {
+            // --- List stack logic (determining relative indent level) ---
+            // Pop levels shallower than the current item
+            while (listIndentStack.length > 0 && listCharIndent < listIndentStack[listIndentStack.length - 1]) {
                 listIndentStack.pop();
             }
-
-            // If it's a new, deeper indent level
-            if (listIndentStack.length === 0 || charIndent > listIndentStack[listIndentStack.length - 1]) {
-                // Simple check: only push if it's reasonably deeper than the previous level
-                if (listIndentStack.length === 0 || charIndent >= (listIndentStack[listIndentStack.length - 1] + spacePerIndent - 1)) {
-                    listIndentStack.push(charIndent);
-                }
-                // If not significantly deeper, treat as same level as parent
-            }
-            // If charIndent matches an existing level in the stack (e.g. de-indenting)
-            else if (listIndentStack.includes(charIndent)) {
-                while (listIndentStack.length > 0 && listIndentStack[listIndentStack.length - 1] !== charIndent) {
-                    listIndentStack.pop();
+            // Push if it represents a new, deeper indent level compared to the (new) top
+            // We only consider it "deeper" if it's at least spacePerIndent more than the previous level
+            if (listIndentStack.length === 0 || listCharIndent >= ((listIndentStack[listIndentStack.length - 1] || -spacePerIndent) + spacePerIndent)) {
+                // Avoid pushing the same level again if the indent matches the current top
+                if (listIndentStack.length === 0 || listCharIndent !== listIndentStack[listIndentStack.length - 1]) {
+                    listIndentStack.push(listCharIndent);
                 }
             }
-            // else: charIndent is same as top, or shallower but not matching an existing level (potentially inconsistent MD)
-            // In these cases, the stack top remains the reference point.
+            // If shallower or equal (and not significantly deeper), the stack is correct after popping.
+            // --- End list stack logic ---
 
-            currentTanaLevel = listIndentStack.length; // Tana level is the depth of the stack
+            const listRelativeIndentLevel = listIndentStack.length;
+            // Additional indent based on relative level (depth 1 = 0 spaces, depth 2 = 2 spaces)
+            const additionalListIndent = '  '.repeat(listRelativeIndentLevel > 0 ? listRelativeIndentLevel - 1 : 0);
 
-            const indentString = '  '.repeat(currentTanaLevel > 0 ? currentTanaLevel - 1 : 0); // Tana level 1 = 0 spaces, level 2 = 2 spaces etc.
             content = applyInlineFormatting(content);
-            outputLines.push(`${indentString}- ${content}`);
+            outputLines.push(`${baseIndent}${additionalListIndent}- ${content}`);
             return;
         }
 
-        // Handle Paragraphs (treat as top-level nodes)
-        listIndentStack.length = 0; // Non-list items reset list indentation
+        // --- Handle Paragraphs --- 
+        listIndentStack.length = 0; // Reset list context
         const content = applyInlineFormatting(trimmedLine);
-        outputLines.push(`- ${content}`);
+        outputLines.push(`${baseIndent}- ${content}`);
     });
 
     tanaPaste += outputLines.join('\n');
