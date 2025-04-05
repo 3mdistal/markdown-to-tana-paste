@@ -34,7 +34,7 @@ export default async function Command() {
     await closeMainWindow();
   } catch (error) {
     await showFailureToast(error, {
-      title: "Conversion Failed"
+      title: "Conversion Failed",
     });
   }
 }
