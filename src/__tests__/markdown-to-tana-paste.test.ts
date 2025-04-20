@@ -1,4 +1,4 @@
-import { markdownToTanaPaste } from "../utils"; // Assuming utils.ts will hold our function
+import { markdownToTanaPaste } from "../utils";
 
 describe("markdownToTanaPaste", () => {
   it("should prepend %%tana%% to the output", () => {
